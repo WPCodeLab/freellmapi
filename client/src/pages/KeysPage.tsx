@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -47,6 +47,11 @@ const statusLabel: Record<string, string> = {
   error: 'error',
   unknown: 'unchecked',
 }
+
+const AUTO_HEALTH_RECHECK_MS = 5 * 60 * 1000
+const AUTO_HEALTH_STRICT_MODE_GUARD_MS = 10 * 1000
+
+let lastKeysRouteAutoCheckAt = 0
 
 interface HealthPlatform {
   platform: string
@@ -259,6 +264,27 @@ export default function KeysPage() {
       queryClient.invalidateQueries({ queryKey: ['keys'] })
     },
   })
+
+  const keysHealthSignature = keys
+    .map(key => `${key.id}:${key.status}:${key.lastCheckedAt ?? ''}`)
+    .join('|')
+
+  useEffect(() => {
+    if (isLoading || checkAll.isPending || keys.length === 0) return
+
+    const now = Date.now()
+    const needsAutoCheck = keys.some(key => {
+      if (key.status === 'unknown' || !key.lastCheckedAt) return true
+      const checkedAt = Date.parse(key.lastCheckedAt)
+      return Number.isNaN(checkedAt) || now - checkedAt >= AUTO_HEALTH_RECHECK_MS
+    })
+
+    if (!needsAutoCheck) return
+    if (now - lastKeysRouteAutoCheckAt < AUTO_HEALTH_STRICT_MODE_GUARD_MS) return
+
+    lastKeysRouteAutoCheckAt = now
+    checkAll.mutate()
+  }, [checkAll, isLoading, keys.length, keysHealthSignature])
 
   const checkKey = useMutation({
     mutationFn: (keyId: number) => apiFetch(`/api/health/check/${keyId}`, { method: 'POST' }),
