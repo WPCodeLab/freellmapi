@@ -2,16 +2,20 @@
 
 // Active platforms — must match server/src/providers/index.ts and
 // server/src/routes/keys.ts PLATFORMS allowlist.
-// Hugging Face, Moonshot, and MiniMax direct integrations were dropped
-// in migrateModelsV4 (see server/src/db/index.ts).
+// Hugging Face and MiniMax direct integrations were dropped in migrateModelsV4
+// (see server/src/db/index.ts).
 export type Platform =
   | 'google'
+  | 'deepseek'
+  | 'kimi'
   | 'groq'
   | 'cerebras'
   | 'sambanova'
   | 'nvidia'
   | 'mistral'
   | 'openrouter'
+  | 'openai'
+  | 'anthropic'
   | 'github'
   | 'cohere'
   | 'cloudflare'

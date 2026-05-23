@@ -239,6 +239,9 @@ describe('OpenAICompatProvider - platform instances', () => {
   // Mirrors the actual registrations in server/src/providers/index.ts.
   // Update both when adding/removing a platform.
   const platforms = [
+    { platform: 'deepseek',   name: 'DeepSeek',      baseUrl: 'https://api.deepseek.com' },
+    { platform: 'kimi',       name: 'Kimi',          baseUrl: 'https://api.moonshot.ai/v1' },
+    { platform: 'openai',     name: 'OpenAI',        baseUrl: 'https://api.openai.com/v1' },
     { platform: 'groq',       name: 'Groq',          baseUrl: 'https://api.groq.com/openai/v1' },
     { platform: 'cerebras',   name: 'Cerebras',      baseUrl: 'https://api.cerebras.ai/v1' },
     { platform: 'sambanova',  name: 'SambaNova',     baseUrl: 'https://api.sambanova.ai/v1' },

@@ -2,6 +2,7 @@ import type { Platform } from '@freellmapi/shared/types.js';
 import type { BaseProvider } from './base.js';
 import { GoogleProvider } from './google.js';
 import { OpenAICompatProvider } from './openai-compat.js';
+import { AnthropicProvider } from './anthropic.js';
 import { CohereProvider } from './cohere.js';
 import { CloudflareProvider } from './cloudflare.js';
 
@@ -13,6 +14,30 @@ function register(provider: BaseProvider) {
 
 // Google - unique Gemini API format
 register(new GoogleProvider());
+
+// DeepSeek - native OpenAI-compatible endpoint
+register(new OpenAICompatProvider({
+  platform: 'deepseek',
+  name: 'DeepSeek',
+  baseUrl: 'https://api.deepseek.com',
+}));
+
+// Kimi (Moonshot) - OpenAI-compatible endpoint
+register(new OpenAICompatProvider({
+  platform: 'kimi',
+  name: 'Kimi',
+  baseUrl: 'https://api.moonshot.ai/v1',
+}));
+
+// OpenAI - native OpenAI-compatible endpoint
+register(new OpenAICompatProvider({
+  platform: 'openai',
+  name: 'OpenAI',
+  baseUrl: 'https://api.openai.com/v1',
+}));
+
+// Anthropic - native Messages API translated to OpenAI-compatible shapes
+register(new AnthropicProvider());
 
 // Groq - OpenAI-compatible
 register(new OpenAICompatProvider({

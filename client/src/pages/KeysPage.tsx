@@ -5,11 +5,17 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { PageHeader } from '@/components/page-header'
 import type { ApiKey, Platform } from '../../../shared/types'
 
 const PLATFORMS: { value: Platform; label: string }[] = [
   { value: 'google', label: 'Google AI Studio' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'kimi', label: 'Kimi' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
   { value: 'groq', label: 'Groq' },
   { value: 'cerebras', label: 'Cerebras' },
   { value: 'sambanova', label: 'SambaNova' },
@@ -55,6 +61,69 @@ interface HealthPlatform {
 interface HealthData {
   platforms: HealthPlatform[]
   keys: { id: number; platform: string; status: string; lastCheckedAt: string | null }[]
+}
+
+interface BulkImportEntry {
+  platform: Platform
+  key: string
+  label?: string
+}
+
+interface BulkImportResult {
+  id: number
+  platform: Platform
+  label: string
+  maskedKey: string
+  status: string
+  kept: boolean
+}
+
+interface BulkImportResponse {
+  totalSubmitted: number
+  created: number
+  validated: number
+  healthy: number
+  invalid: number
+  errors: number
+  removed: number
+  results: BulkImportResult[]
+}
+
+function parseBulkImport(text: string): BulkImportEntry[] {
+  const allowed = new Set(PLATFORMS.map(platform => platform.value))
+  const entries: BulkImportEntry[] = []
+
+  for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+
+    const separator = line.includes('\t') ? '\t' : ','
+    const parts = line.split(separator).map(part => part.trim())
+    if (parts.length < 2) {
+      throw new Error(`Line ${index + 1}: expected format platform,key,label(optional)`)
+    }
+
+    const [platformRaw, keyRaw, ...labelParts] = parts
+    if (!allowed.has(platformRaw as Platform)) {
+      throw new Error(`Line ${index + 1}: unsupported platform '${platformRaw}'`)
+    }
+    if (!keyRaw) {
+      throw new Error(`Line ${index + 1}: missing key value`)
+    }
+
+    const label = labelParts.join(separator).trim()
+    entries.push({
+      platform: platformRaw as Platform,
+      key: keyRaw,
+      ...(label ? { label } : {}),
+    })
+  }
+
+  if (entries.length === 0) {
+    throw new Error('No import entries found')
+  }
+
+  return entries
 }
 
 function UnifiedKeySection() {
@@ -131,6 +200,11 @@ export default function KeysPage() {
   const [apiKey, setApiKey] = useState('')
   const [accountId, setAccountId] = useState('')
   const [label, setLabel] = useState('')
+  const [bulkText, setBulkText] = useState('')
+  const [bulkValidate, setBulkValidate] = useState(true)
+  const [bulkPruneInvalid, setBulkPruneInvalid] = useState(true)
+  const [bulkImportError, setBulkImportError] = useState<string | null>(null)
+  const [bulkImportSummary, setBulkImportSummary] = useState<BulkImportResponse | null>(null)
 
   const { data: keys = [], isLoading } = useQuery<ApiKey[]>({
     queryKey: ['keys'],
@@ -165,6 +239,19 @@ export default function KeysPage() {
     },
   })
 
+  const bulkImport = useMutation({
+    mutationFn: (body: { entries: BulkImportEntry[]; validate: boolean; pruneInvalid: boolean }) =>
+      apiFetch<BulkImportResponse>('/api/keys/import', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['keys'] })
+      queryClient.invalidateQueries({ queryKey: ['health'] })
+      queryClient.invalidateQueries({ queryKey: ['fallback'] })
+      setBulkImportError(null)
+      setBulkImportSummary(data)
+      setBulkText('')
+    },
+  })
+
   const checkAll = useMutation({
     mutationFn: () => apiFetch('/api/health/check-all', { method: 'POST' }),
     onSuccess: () => {
@@ -189,6 +276,27 @@ export default function KeysPage() {
     if (needsAccountId && !accountId) return
     const key = needsAccountId ? `${accountId}:${apiKey}` : apiKey
     addKey.mutate({ platform, key, label: label || undefined })
+  }
+
+  const handleBulkImport = (e: React.FormEvent) => {
+    e.preventDefault()
+
+    let entries: BulkImportEntry[]
+    try {
+      entries = parseBulkImport(bulkText)
+    } catch (error) {
+      setBulkImportSummary(null)
+      setBulkImportError((error as Error).message)
+      return
+    }
+
+    setBulkImportError(null)
+    setBulkImportSummary(null)
+    bulkImport.mutate({
+      entries,
+      validate: bulkValidate || bulkPruneInvalid,
+      pruneInvalid: bulkPruneInvalid,
+    })
   }
 
   const healthKeyMap = new Map<number, { status: string; lastCheckedAt: string | null }>()
@@ -222,7 +330,7 @@ export default function KeysPage() {
             <div className="space-y-1.5">
               <Label className="text-xs">Platform</Label>
               <Select value={platform} onValueChange={(v) => setPlatform(v as Platform)}>
-                <SelectTrigger className="w-[220px]">
+                <SelectTrigger className="w-55">
                   <SelectValue placeholder="Select provider" />
                 </SelectTrigger>
                 <SelectContent>
@@ -239,11 +347,11 @@ export default function KeysPage() {
                   value={accountId}
                   onChange={e => setAccountId(e.target.value)}
                   placeholder="a1b2c3d4…"
-                  className="w-[200px] font-mono text-xs"
+                  className="w-50 font-mono text-xs"
                 />
               </div>
             )}
-            <div className="space-y-1.5 flex-1 min-w-[240px]">
+            <div className="space-y-1.5 flex-1 min-w-60">
               <Label className="text-xs">{needsAccountId ? 'API token' : 'API key'}</Label>
               <Input
                 type="password"
@@ -259,7 +367,7 @@ export default function KeysPage() {
                 value={label}
                 onChange={e => setLabel(e.target.value)}
                 placeholder="optional"
-                className="w-[160px]"
+                className="w-40"
               />
             </div>
             <Button type="submit" size="sm" disabled={!platform || !apiKey || (needsAccountId && !accountId) || addKey.isPending}>
@@ -268,6 +376,90 @@ export default function KeysPage() {
           </form>
           {addKey.isError && (
             <p className="text-destructive text-xs mt-2">{(addKey.error as Error).message}</p>
+          )}
+        </section>
+
+        <section>
+          <h2 className="text-sm font-medium mb-3">Bulk import</h2>
+          <form onSubmit={handleBulkImport} className="rounded-lg border bg-card p-4 space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Local import format</Label>
+              <Textarea
+                value={bulkText}
+                onChange={e => setBulkText(e.target.value)}
+                placeholder={[
+                  '# one entry per line',
+                  'deepseek,sk-example-deepseek,DeepSeek primary',
+                  'kimi,sk-example-kimi,Kimi primary',
+                  'google,AIzaSyExample,Personal Gemini',
+                  'openai,sk-example-openai,GPT paid',
+                  'anthropic,sk-ant-example,Claude primary',
+                ].join('\n')}
+                className="min-h-36 font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                Use <span className="font-mono">platform,key,label(optional)</span>. Comma or tab separated. Comment lines starting with <span className="font-mono">#</span> are ignored.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-6">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Switch
+                  checked={bulkValidate}
+                  onCheckedChange={(checked) => setBulkValidate(Boolean(checked) || bulkPruneInvalid)}
+                />
+                Validate after import
+              </label>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Switch
+                  checked={bulkPruneInvalid}
+                  onCheckedChange={(checked) => {
+                    const next = Boolean(checked)
+                    setBulkPruneInvalid(next)
+                    if (next) setBulkValidate(true)
+                  }}
+                />
+                Discard confirmed invalid imports
+              </label>
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                Supported platforms only. Invalid credentials can be dropped immediately after the health check.
+              </p>
+              <Button type="submit" size="sm" disabled={!bulkText.trim() || bulkImport.isPending}>
+                {bulkImport.isPending ? 'Importing…' : 'Import keys'}
+              </Button>
+            </div>
+          </form>
+
+          {bulkImportError && (
+            <p className="text-destructive text-xs mt-2">{bulkImportError}</p>
+          )}
+          {bulkImport.isError && (
+            <p className="text-destructive text-xs mt-2">{(bulkImport.error as Error).message}</p>
+          )}
+          {bulkImportSummary && (
+            <div className="mt-3 rounded-lg border bg-card p-4 space-y-2">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground tabular-nums">
+                <span>{bulkImportSummary.totalSubmitted} submitted</span>
+                <span>{bulkImportSummary.healthy} healthy</span>
+                <span>{bulkImportSummary.invalid} invalid</span>
+                <span>{bulkImportSummary.errors} errors</span>
+                <span>{bulkImportSummary.removed} removed</span>
+              </div>
+              <div className="space-y-1">
+                {bulkImportSummary.results.slice(0, 6).map(result => (
+                  <div key={`${result.platform}-${result.id}`} className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className={`size-1.5 rounded-full ${result.status === 'healthy' ? 'bg-emerald-500' : result.status === 'invalid' ? 'bg-rose-500' : 'bg-amber-500'}`} />
+                    <span className="font-medium">{PLATFORMS.find(p => p.value === result.platform)?.label ?? result.platform}</span>
+                    <code className="font-mono text-muted-foreground">{result.maskedKey}</code>
+                    <span className="text-muted-foreground">{result.status}</span>
+                    {!result.kept && <span className="text-muted-foreground">removed</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </section>
 
@@ -298,8 +490,8 @@ export default function KeysPage() {
                       const lastChecked = h?.lastCheckedAt
                       return (
                         <div key={k.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
-                          <span className={`size-1.5 rounded-full flex-shrink-0 ${statusDot[status] ?? statusDot.unknown}`} />
-                          <code className="text-xs font-mono flex-shrink-0">{k.maskedKey}</code>
+                          <span className={`size-1.5 rounded-full shrink-0 ${statusDot[status] ?? statusDot.unknown}`} />
+                          <code className="text-xs font-mono shrink-0">{k.maskedKey}</code>
                           {k.label && <span className="text-xs text-muted-foreground">{k.label}</span>}
                           <span className="text-xs text-muted-foreground">{statusLabel[status] ?? status}</span>
                           <div className="flex-1" />

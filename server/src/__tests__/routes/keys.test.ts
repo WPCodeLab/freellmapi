@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import type { Express } from 'express';
 import { createApp } from '../../app.js';
 import { initDb, getDb } from '../../db/index.js';
@@ -29,6 +29,7 @@ describe('Keys API', () => {
   });
 
   beforeEach(() => {
+    vi.restoreAllMocks();
     const db = getDb();
     db.prepare('DELETE FROM api_keys').run();
   });
@@ -78,6 +79,77 @@ describe('Keys API', () => {
       platform: 'groq',
     });
     expect(status).toBe(400);
+  });
+
+  it('POST /api/keys accepts direct openai, anthropic, kimi, and deepseek providers', async () => {
+    const deepseek = await request(app, 'POST', '/api/keys', {
+      platform: 'deepseek',
+      key: 'sk-deepseek-test',
+    });
+    const kimi = await request(app, 'POST', '/api/keys', {
+      platform: 'kimi',
+      key: 'sk-kimi-test',
+    });
+    const openai = await request(app, 'POST', '/api/keys', {
+      platform: 'openai',
+      key: 'sk-openai-test',
+    });
+    const anthropic = await request(app, 'POST', '/api/keys', {
+      platform: 'anthropic',
+      key: 'sk-ant-test',
+    });
+
+    expect(deepseek.status).toBe(201);
+    expect(deepseek.body.platform).toBe('deepseek');
+    expect(kimi.status).toBe(201);
+    expect(kimi.body.platform).toBe('kimi');
+    expect(openai.status).toBe(201);
+    expect(openai.body.platform).toBe('openai');
+    expect(anthropic.status).toBe(201);
+    expect(anthropic.body.platform).toBe('anthropic');
+  });
+
+  it('POST /api/keys/import validates new keys and prunes invalid ones', async () => {
+    vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      const target = String(url);
+      if (target.includes('api.deepseek.com/models')) {
+        return { ok: true, status: 200 } as any;
+      }
+      if (target.includes('api.moonshot.ai/v1/models')) {
+        return { ok: false, status: 401 } as any;
+      }
+      if (target.includes('api.openai.com/v1/models')) {
+        return { ok: false, status: 401 } as any;
+      }
+      if (target.includes('api.anthropic.com/v1/models')) {
+        return { ok: true, status: 200 } as any;
+      }
+      return { ok: true, status: 200 } as any;
+    });
+
+    const { status, body } = await request(app, 'POST', '/api/keys/import', {
+      entries: [
+        { platform: 'deepseek', key: 'sk-deepseek-test', label: 'DeepSeek good' },
+        { platform: 'kimi', key: 'sk-kimi-test', label: 'Kimi bad' },
+        { platform: 'openai', key: 'sk-openai-test', label: 'OpenAI bad' },
+        { platform: 'anthropic', key: 'sk-anthropic-test', label: 'Anthropic good' },
+      ],
+      validate: true,
+      pruneInvalid: true,
+    });
+
+    expect(status).toBe(201);
+    expect(body.healthy).toBe(2);
+    expect(body.invalid).toBe(2);
+    expect(body.removed).toBe(2);
+    expect(body.results).toHaveLength(4);
+    expect(body.results.find((r: any) => r.platform === 'deepseek').kept).toBe(true);
+    expect(body.results.find((r: any) => r.platform === 'kimi').kept).toBe(false);
+    expect(body.results.find((r: any) => r.platform === 'openai').kept).toBe(false);
+
+    const after = await request(app, 'GET', '/api/keys');
+    expect(after.body).toHaveLength(2);
+    expect(after.body.map((row: any) => row.platform).sort()).toEqual(['anthropic', 'deepseek']);
   });
 
   it('DELETE /api/keys/:id removes a key', async () => {

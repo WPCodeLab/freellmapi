@@ -46,6 +46,8 @@ export function initDb(dbPath?: string): Database.Database {
   migrateModelsV9(db);
   migrateModelsV10(db);
   migrateModelsV11(db);
+  migrateModelsV12(db);
+  migrateModelsV13(db);
   ensureUnifiedKey(db);
 
   console.log(`Database initialized at ${resolvedPath}`);
@@ -141,6 +143,8 @@ function seedModels(db: Database.Database) {
     ['cerebras', 'llama-4-maverick-17b-128e-instruct', 'Llama 4 Maverick', 3, 1, 'Frontier', 30, null, 60000, 1000000, '~30M', 131072],
     ['cerebras', 'qwen3-235b', 'Qwen3 235B', 3, 1, 'Large', 30, null, 60000, 1000000, '~30M', 8192],
     ['cerebras', 'gpt-oss-120b', 'GPT-OSS 120B', 3, 1, 'Large', 30, null, 60000, 1000000, '~30M', 131072],
+    ['openai', 'gpt-5.5', 'GPT-5.5', 1, 7, 'Frontier', null, null, null, null, 'BYO paid', 128000],
+    ['anthropic', 'claude-opus-4-7', 'Claude Opus 4.7', 2, 8, 'Frontier', null, null, null, null, 'BYO paid', 200000],
     // GitHub Models — GPT-4o replaced with GPT-5 (same free tier key)
     ['github', 'openai/gpt-5', 'GPT-5 (GitHub)', 1, 7, 'Frontier', 10, 50, null, null, '~18M', 128000],
     // SambaNova — 70B RPM bumped to 20
@@ -926,6 +930,77 @@ function migrateModelsV11(db: Database.Database) {
       for (let i = 0; i < missing.length; i++) addFb.run(missing[i].id, maxPriority + i + 1);
     }
   });
+  apply();
+}
+
+/**
+ * V12 (May 2026): add direct OpenAI + Anthropic platform support.
+ * These are bring-your-own-key rows rather than free-tier catalog entries,
+ * so numeric budget/rate fields stay null and the UI shows them as BYO paid.
+ */
+function migrateModelsV12(db: Database.Database) {
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, size_label, rpm_limit, rpd_limit, tpm_limit, tpd_limit, monthly_token_budget, context_window)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const additions: Array<[string, string, string, number, number, string, number | null, number | null, number | null, number | null, string, number | null]> = [
+    ['openai', 'gpt-5.5', 'GPT-5.5', 1, 7, 'Frontier', null, null, null, null, 'BYO paid', 128000],
+    ['anthropic', 'claude-opus-4-7', 'Claude Opus 4.7', 2, 8, 'Frontier', null, null, null, null, 'BYO paid', 200000],
+  ];
+
+  const apply = db.transaction(() => {
+    for (const a of additions) insert.run(...a);
+    const missing = db.prepare(`
+      SELECT m.id FROM models m
+      LEFT JOIN fallback_config f ON m.id = f.model_db_id
+      WHERE f.id IS NULL ORDER BY m.intelligence_rank ASC
+    `).all() as { id: number }[];
+    if (missing.length > 0) {
+      const maxPriority = (db.prepare('SELECT COALESCE(MAX(priority), 0) AS mx FROM fallback_config').get() as { mx: number }).mx;
+      const addFb = db.prepare('INSERT INTO fallback_config (model_db_id, priority, enabled) VALUES (?, ?, 1)');
+      for (let i = 0; i < missing.length; i++) addFb.run(missing[i].id, maxPriority + i + 1);
+    }
+  });
+
+  apply();
+}
+
+/**
+ * V13 (May 2026): restore direct Kimi + add direct DeepSeek support.
+ *
+ * Both vendors now expose OpenAI-compatible APIs, so the project can support
+ * user-supplied paid keys directly without reintroducing the old free-tier
+ * assumptions that caused Moonshot to be dropped in V4.
+ */
+function migrateModelsV13(db: Database.Database) {
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, size_label, rpm_limit, rpd_limit, tpm_limit, tpd_limit, monthly_token_budget, context_window)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const additions: Array<[string, string, string, number, number, string, number | null, number | null, number | null, number | null, string, number | null]> = [
+    ['deepseek', 'deepseek-chat', 'DeepSeek Chat', 6, 8, 'Large', null, null, null, null, 'BYO paid', 131072],
+    ['deepseek', 'deepseek-v4-flash', 'DeepSeek V4 Flash', 4, 7, 'Frontier', null, null, null, null, 'BYO paid', 131072],
+    ['deepseek', 'deepseek-v4-pro', 'DeepSeek V4 Pro', 2, 8, 'Frontier', null, null, null, null, 'BYO paid', 131072],
+    ['kimi', 'kimi-k2.5', 'Kimi K2.5', 4, 8, 'Frontier', null, null, null, null, 'BYO paid', 262144],
+    ['kimi', 'kimi-k2.6', 'Kimi K2.6', 3, 8, 'Frontier', null, null, null, null, 'BYO paid', 262144],
+  ];
+
+  const apply = db.transaction(() => {
+    for (const a of additions) insert.run(...a);
+    const missing = db.prepare(`
+      SELECT m.id FROM models m
+      LEFT JOIN fallback_config f ON m.id = f.model_db_id
+      WHERE f.id IS NULL ORDER BY m.intelligence_rank ASC
+    `).all() as { id: number }[];
+    if (missing.length > 0) {
+      const maxPriority = (db.prepare('SELECT COALESCE(MAX(priority), 0) AS mx FROM fallback_config').get() as { mx: number }).mx;
+      const addFb = db.prepare('INSERT INTO fallback_config (model_db_id, priority, enabled) VALUES (?, ?, 1)');
+      for (let i = 0; i < missing.length; i++) addFb.run(missing[i].id, maxPriority + i + 1);
+    }
+  });
+
   apply();
 }
 
